@@ -3,18 +3,22 @@ import {
     refreshMap, toggleCadastreMode, toggleSavedParcels, toggleHeatmap, 
     toggleBorders, updateCadastreOpacity, registerMapCallbacks, getMapInstance, 
     startReplay, stopReplay, displaySingleTrip, clearTracksAndShowPoints,
-    calculateGeoJSONArea 
+    calculateGeoJSONArea, updateRadarDisplay, removeRadarDisplay,
+    toggleBegoledexOnMap, toggleMeasureTool, clearMeasurement,
+    setReplaySpeed, toggleReplayPause 
 } from './map.js';
-import { toggleTracking } from './tracking.js';
 import { toggleSoundscape, updateAudioWeather } from './audio.js';
-import { showAchievements } from './gamification.js';
+import { showAchievements, updateUserLevel } from './gamification.js';
 import { handlePlantUpload, resetPlantNetUI } from './plantnet.js';
 import { openPisteurModal } from './pisteur.js';
 import { openBegoledexModal } from './begoledex.js';
 
-import { showToast, triggerHaptic, pad, compressImage, getSpeedColor } from './utils.js';
+import { 
+    showToast, triggerHaptic, pad, compressImage, getSpeedColor,
+    exportTripToGPX, parseGPX, toDMS, playAudioCue 
+} from './utils.js';
 import { VILLAGE_COORDS, SECRET_EMOJIS } from './config.js';
-import { appState, setPoints } from './state.js'; // appState nécessaire pour le vent
+import { appState, setPoints } from './state.js'; 
 import { updateWeatherWidget } from './modules/weather.js';
 
 // --- État UI (Variables locales) ---
@@ -53,7 +57,7 @@ export function initEventListeners(map) {
         updateUserMarker(e.detail.lat, e.detail.lng, e.detail.acc, e.detail.head);
     });
 
-    // --- NOUVEAU : Écouteur pour la mise à jour Météo (Vent) ---
+    // Écouteur pour la mise à jour Météo (Vent)
     document.addEventListener('weather-updated', updateWindVisuals);
 
     // --- Boutons Flottants & Menu ---
@@ -66,12 +70,18 @@ export function initEventListeners(map) {
     });
 
     // --- Actions Rapides ---
-    document.getElementById('btn-tracking').addEventListener('click', toggleTracking);
+    // 1. Bouton Tracking Ancien (Clic simple)
+    document.getElementById('btn-tracking').addEventListener('click', () => {
+        import('./tracking.js').then(module => module.toggleTracking());
+    });
     
-    document.getElementById('btn-pocket-mode').addEventListener('click', togglePocketMode);
-    document.getElementById('pocket-overlay').addEventListener('click', togglePocketMode);
-    document.getElementById('btn-pocket-unlock').addEventListener('click', (e) => {
-        e.stopPropagation(); togglePocketMode();
+    // 2. Sliders pour le Mode Poche
+    createSwipeAction('swipe-pocket-container', 'swipe-pocket-thumb', 'swipe-pocket-text', () => {
+        togglePocketMode();
+    });
+
+    createSwipeAction('swipe-unlock-container', 'swipe-unlock-thumb', 'swipe-unlock-text', () => {
+        togglePocketMode();
     });
 
     document.getElementById('btn-fullscreen').addEventListener('click', toggleFullScreen);
@@ -115,11 +125,108 @@ export function initEventListeners(map) {
     
     document.getElementById('heatmap-toggle').addEventListener('change', (e) => toggleHeatmap(e.target.checked, appState.trips));
     
-    document.getElementById('radar-toggle').addEventListener('change', (e) => {
-        if(e.target.checked) showToast("📡 Radar activé (40m)");
+    // --- Radar Proximité ---
+    const radarToggle = document.getElementById('radar-toggle');
+    const radarSelect = document.getElementById('radar-radius-select');
+    if (radarToggle) {
+        radarToggle.addEventListener('change', (e) => {
+            appState.radarActive = e.target.checked;
+            if (e.target.checked) {
+                showToast(`📡 Radar activé (${appState.radarRadius}m)`);
+                playAudioCue('radar');
+                const center = userMarker ? userMarker.getLatLng() : map.getCenter();
+                updateRadarDisplay(center, appState.radarRadius, false);
+            } else {
+                removeRadarDisplay();
+                showToast("Radar désactivé");
+            }
+        });
+    }
+    if (radarSelect) {
+        radarSelect.addEventListener('change', (e) => {
+            appState.radarRadius = parseInt(e.target.value, 10);
+            if (appState.radarActive) {
+                const center = userMarker ? userMarker.getLatLng() : map.getCenter();
+                updateRadarDisplay(center, appState.radarRadius, false);
+            }
+        });
+    }
+
+    // --- Bégoledex sur Carte ---
+    const begoledexMapToggle = document.getElementById('begoledex-map-toggle');
+    if (begoledexMapToggle) {
+        begoledexMapToggle.addEventListener('change', (e) => {
+            appState.showBegoledexOnMap = e.target.checked;
+            toggleBegoledexOnMap(e.target.checked, appState.begoledex);
+        });
+    }
+
+    // --- Outil Mesure / Télémètre ---
+    const btnMeasure = document.getElementById('btn-measure');
+    if (btnMeasure) {
+        btnMeasure.addEventListener('click', () => {
+            toggleMenu();
+            const active = toggleMeasureTool();
+            btnMeasure.style.background = active ? "#d35400" : "#e67e22";
+        });
+    }
+
+    // --- SOS & Partage Coordonnées ---
+    const btnSos = document.getElementById('btn-sos');
+    if (btnSos) {
+        btnSos.addEventListener('click', () => {
+            toggleMenu();
+            openSosModal();
+        });
+    }
+    const btnSosClose = document.getElementById('btn-sos-close');
+    if (btnSosClose) {
+        btnSosClose.addEventListener('click', () => {
+            document.getElementById('modal-sos').classList.add('hidden');
+        });
+    }
+    const btnSosCopy = document.getElementById('btn-sos-copy');
+    if (btnSosCopy) {
+        btnSosCopy.addEventListener('click', copySosCoordinates);
+    }
+
+    // --- Replay Contrôles Avancés ---
+    const btnReplayPause = document.getElementById('btn-replay-pause');
+    if (btnReplayPause) {
+        btnReplayPause.addEventListener('click', () => {
+            const paused = toggleReplayPause();
+            btnReplayPause.textContent = paused ? "▶️" : "⏸️";
+        });
+    }
+    document.querySelectorAll('.replay-speed-pill').forEach(pill => {
+        pill.addEventListener('click', (e) => {
+            document.querySelectorAll('.replay-speed-pill').forEach(p => p.classList.remove('active'));
+            e.target.classList.add('active');
+            const spd = parseFloat(e.target.dataset.speed);
+            setReplaySpeed(spd);
+        });
     });
+    document.addEventListener('replay-progress', (e) => {
+        const pBar = document.getElementById('replay-progress-bar');
+        if (pBar) pBar.style.width = `${e.detail.percent}%`;
+    });
+
+    // --- Chips Catégories Rapides ---
+    document.querySelectorAll('.btn-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+            const emoji = chip.dataset.emoji;
+            const text = chip.dataset.text;
+            document.getElementById('input-emoji').value = emoji;
+            const noteInput = document.getElementById('input-note');
+            if (!noteInput.value) {
+                noteInput.value = text;
+            }
+            triggerHaptic('success');
+        });
+    });
+
     document.getElementById('deep-night-toggle').addEventListener('change', toggleDeepNight);
-    document.getElementById('intruder-toggle').addEventListener('change', () => applyFilters());
+    document.getElementById('intruder-toggle').addEventListener('change', () => applyFilters(false));
     
     const borderToggle = document.getElementById('borders-toggle');
     if (borderToggle) {
@@ -130,8 +237,19 @@ export function initEventListeners(map) {
     
     document.getElementById('clouds-toggle').addEventListener('change', toggleClouds);
 
-    // --- Filtres ---
-    document.getElementById('btn-filter-ok').addEventListener('click', applyFilters);
+    // --- Filtres en direct (Live Search) ---
+    let filterDebounce = null;
+    const onLiveFilter = () => {
+        clearTimeout(filterDebounce);
+        filterDebounce = setTimeout(() => {
+            applyFilters(false);
+        }, 200);
+    };
+    document.getElementById('text-filter-input').addEventListener('input', onLiveFilter);
+    document.getElementById('filter-input').addEventListener('input', onLiveFilter);
+    document.getElementById('filter-year').addEventListener('change', () => applyFilters(false));
+    document.getElementById('filter-month').addEventListener('change', () => applyFilters(false));
+    document.getElementById('btn-filter-ok').addEventListener('click', () => applyFilters(true));
     document.getElementById('btn-filter-reset').addEventListener('click', resetFilters);
     document.getElementById('btn-loc').addEventListener('click', toggleLocationRequest);
 
@@ -176,9 +294,26 @@ export function initEventListeners(map) {
     document.getElementById('achievements-trigger').addEventListener('click', () => showAchievements(appState.points, appState.trips));
     document.getElementById('btn-achievements-close').addEventListener('click', () => document.getElementById('modal-achievements').classList.add('hidden'));
 
-    // --- Système ---
+    // --- Système & Import GPX ---
     document.getElementById('btn-export').addEventListener('click', exportData);
     document.getElementById('import-file').addEventListener('change', importData);
+    
+    const gpxInput = document.getElementById('import-gpx-file');
+    if (gpxInput) {
+        gpxInput.addEventListener('change', handleGpxImport);
+    }
+
+    // Réaction sauvegarde trajet
+    document.addEventListener('trip-saved', () => {
+        if (!document.getElementById('history-overlay').classList.contains('hidden')) {
+            openHistory();
+        }
+        const heatToggle = document.getElementById('heatmap-toggle');
+        if (heatToggle && heatToggle.checked) {
+            toggleHeatmap(true, appState.trips);
+        }
+    });
+
     document.getElementById('btn-reset-data').addEventListener('click', async () => {
         if(confirm("⚠️ Tout effacer ? Action irréversible.")) {
             await clearStoreDB('points'); await clearStoreDB('parcels'); await clearStoreDB('trips'); await clearStoreDB('begoledex');
@@ -270,6 +405,12 @@ function openHistory() {
         btnElev.title = "Dénivelé";
         btnElev.textContent = "📈";
 
+        const btnGpx = document.createElement('button');
+        btnGpx.className = "btn-graph-trip";
+        btnGpx.style.background = "#27ae60";
+        btnGpx.title = "Exporter GPX";
+        btnGpx.textContent = "🗺️";
+
         const btnEdit = document.createElement('button');
         btnEdit.className = "btn-delete-trip";
         btnEdit.style.background = "#8e44ad";
@@ -283,6 +424,7 @@ function openHistory() {
 
         btnArea.appendChild(btnPlay);
         btnArea.appendChild(btnElev);
+        btnArea.appendChild(btnGpx);
         btnArea.appendChild(btnEdit);
         btnArea.appendChild(btnDel);
 
@@ -305,6 +447,11 @@ function openHistory() {
 
         btnElev.onclick = () => {
             openElevationModal(t);
+        };
+
+        btnGpx.onclick = (e) => {
+            e.stopPropagation();
+            exportTripToGPX(t);
         };
 
         btnEdit.onclick = () => {
@@ -400,6 +547,46 @@ function drawElevationProfile(pts) {
     ctx.stroke();
 }
 
+async function handleGpxImport(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    try {
+        const text = await file.text();
+        const parsed = parseGPX(text);
+        if (!parsed.points || parsed.points.length < 2) {
+            showToast("Tracé GPX invalide ou trop court ❌");
+            return;
+        }
+
+        const newTrip = {
+            id: Date.now(),
+            date: new Date().toISOString(),
+            duration: 0,
+            distance: parsed.distance,
+            points: parsed.points,
+            elevationGain: parsed.elevationGain,
+            note: parsed.name ? `GPX: ${parsed.name}` : "Trace GPX importée"
+        };
+
+        await saveToDB('trips', newTrip);
+        appState.trips.push(newTrip);
+        updateUserLevel(appState.points, appState.trips);
+        
+        displaySingleTrip(newTrip, '#2ecc71');
+        showToast(`GPX importé : ${(parsed.distance).toFixed(2)}km, +${parsed.elevationGain}m 🥾`);
+        triggerHaptic('success');
+        playAudioCue('success');
+        
+        document.dispatchEvent(new CustomEvent('trip-saved', { detail: { trip: newTrip } }));
+    } catch (err) {
+        console.error("Erreur import GPX", err);
+        alert("Erreur lors de l'import GPX : " + err.message);
+    } finally {
+        e.target.value = '';
+    }
+}
+
 // ============================================================
 // --- GESTION DES STATISTIQUES ---
 // ============================================================
@@ -440,9 +627,6 @@ function openStatsModal() {
     toggleMenuIfMobile();
 }
 
-/**
- * Affiche les stats cadastre groupées par couleur
- */
 function openCadastreStats() {
     const parcels = appState.parcels;
     
@@ -659,7 +843,7 @@ async function deleteParcel(id) {
 // --- FILTRES & CARTE ---
 // ============================================================
 
-function applyFilters() {
+function applyFilters(closeMenu = true) {
     const filters = {
         emoji: document.getElementById('filter-input').value.trim() || null,
         text: document.getElementById('text-filter-input').value.trim().toLowerCase() || null,
@@ -668,7 +852,9 @@ function applyFilters() {
         intruderMode: document.getElementById('intruder-toggle').checked
     };
     refreshMap(appState.points, filters);
-    toggleMenu();
+    if (closeMenu) {
+        toggleMenuIfMobile();
+    }
 }
 
 function resetFilters() {
@@ -716,6 +902,61 @@ function togglePocketMode() {
     el.classList.toggle('hidden-poche');
     if (!el.classList.contains('hidden-poche')) {
         toggleMenu(); 
+    }
+}
+
+// --- SECOURS & SOS ---
+let currentSosText = "";
+
+function openSosModal() {
+    let lat, lng, acc;
+    if (appState.userPosition && appState.userPosition.lat) {
+        lat = appState.userPosition.lat;
+        lng = appState.userPosition.lng;
+        acc = Math.round(appState.userPosition.acc || 0);
+    } else {
+        lat = VILLAGE_COORDS[0];
+        lng = VILLAGE_COORDS[1];
+        acc = null;
+    }
+
+    const decText = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+    const dmsText = toDMS(lat, lng);
+    const accText = acc ? `Précision GPS : ±${acc}m` : "Précision GPS : Estimée (Centre village)";
+
+    const elDec = document.getElementById('sos-decimal');
+    const elDms = document.getElementById('sos-dms');
+    const elPrec = document.getElementById('sos-precision');
+
+    if (elDec) elDec.textContent = decText;
+    if (elDms) elDms.textContent = dmsText;
+    if (elPrec) elPrec.textContent = accText;
+
+    const mapsUrl = `https://www.google.com/maps?q=${lat},${lng}`;
+    const smsBody = encodeURIComponent(`URGENCE BÉGOLE - Mes coordonnées : ${decText} (${dmsText})${acc ? ' ±' + acc + 'm' : ''}\nLien Maps : ${mapsUrl}`);
+
+    const btnSms = document.getElementById('btn-sos-sms');
+    if (btnSms) btnSms.href = `sms:?body=${smsBody}`;
+
+    const btnMaps = document.getElementById('btn-sos-maps');
+    if (btnMaps) btnMaps.href = mapsUrl;
+
+    currentSosText = `URGENCE BÉGOLE\nCoordonnées : ${decText}\nDMS : ${dmsText}\n${accText}\nLien Maps : ${mapsUrl}`;
+
+    document.getElementById('modal-sos').classList.remove('hidden');
+    triggerHaptic('warning');
+}
+
+function copySosCoordinates() {
+    if (navigator.clipboard && currentSosText) {
+        navigator.clipboard.writeText(currentSosText).then(() => {
+            showToast("Coordonnées copiées dans le presse-papier !");
+            triggerHaptic('success');
+        }).catch(() => {
+            showToast("Erreur lors de la copie");
+        });
+    } else {
+        showToast("Texte non disponible");
     }
 }
 
@@ -815,7 +1056,6 @@ function addHistoryToCurrentPoint() {
     const processEntry = async () => {
         let photoData = null;
         if (fileInput.files[0]) {
-            // Optimisation stockage : 600px max et qualité 0.6
             photoData = await compressImage(fileInput.files[0], 600, 0.6);
         }
 
@@ -915,28 +1155,50 @@ function exportData() {
 }
 
 function importData(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
     const f = new FileReader();
     f.onload = async (ev) => {
         try {
             const d = JSON.parse(ev.target.result);
-            if (d.points) {
+            let importedCount = 0;
+
+            if (Array.isArray(d.points)) {
                 for (let p of d.points) {
                     if (!p.id) p.id = Date.now() + Math.random();
                     await saveToDB('points', p);
+                    importedCount++;
                 }
             }
-            if (d.begoledex) { // Import du Bégoledex aussi
+            if (Array.isArray(d.trips)) {
+                for (let t of d.trips) {
+                    if (!t.id) t.id = Date.now() + Math.random();
+                    await saveToDB('trips', t);
+                    importedCount++;
+                }
+            }
+            if (Array.isArray(d.parcels)) {
+                for (let pc of d.parcels) {
+                    if (!pc.id) pc.id = Date.now() + Math.random();
+                    await saveToDB('parcels', pc);
+                    importedCount++;
+                }
+            }
+            if (Array.isArray(d.begoledex)) { 
                 for (let b of d.begoledex) {
-                     await saveToDB('begoledex', b);
+                    if (!b.id) b.id = Date.now() + Math.random();
+                    await saveToDB('begoledex', b);
+                    importedCount++;
                 }
             }
-            showToast("Données importées ! Rechargez la page.");
-            setTimeout(() => location.reload(), 1500);
+            showToast(`${importedCount} éléments restaurés ! Recharge...`);
+            setTimeout(() => location.reload(), 1200);
         } catch (err) {
             alert("Erreur import : " + err);
         }
     };
-    f.readAsText(e.target.files[0]);
+    f.readAsText(file);
 }
 
 // --- EFFETS VISUELS UI ---
@@ -991,12 +1253,10 @@ export function triggerWeatherEffect(desc) {
     }
 }
 
-// --- GESTION VENT (POLLEN ROTATIF) - REMPLACE L'ANCIEN EFFET "LEAVES" ---
 export function updateWindVisuals() {
     const container = document.getElementById('pollen-overlay');
     if (!container) return;
     
-    // 1. Désactivé la nuit
     const isNight = document.body.classList.contains('theme-dark');
     if (isNight) {
         container.style.opacity = '0';
@@ -1005,20 +1265,16 @@ export function updateWindVisuals() {
         container.style.opacity = '1';
     }
 
-    // 2. Initialisation si vide
     if (container.children.length === 0) {
         initAmbientEffects(); 
     }
 
-    // 3. Application du Vent
     const windDir = (appState.currentEnv && appState.currentEnv.windDir) ? appState.currentEnv.windDir : 0;
     const windSpeed = (appState.currentEnv && appState.currentEnv.windSpeed) ? appState.currentEnv.windSpeed : 5;
 
-    // Rotation : L'anim monte (0°), si vent du Nord (0°), il souffle vers le Sud (180°)
     const rotation = windDir + 180;
     container.style.transform = `rotate(${rotation}deg)`;
 
-    // Vitesse de l'animation
     const particles = document.querySelectorAll('.pollen');
     const duration = Math.max(2, 20 - (windSpeed / 2)) + 's';
     
@@ -1060,11 +1316,7 @@ function toggleMenuIfMobile() {
     }
 }
 
-/**
- * Génère les particules d'ambiance (Lucioles & Pollen)
- */
 function initAmbientEffects() {
-    // 1. Lucioles (Fireflies)
     const fireflyContainer = document.getElementById('firefly-overlay');
     if (fireflyContainer && fireflyContainer.children.length === 0) {
         for (let i = 0; i < 20; i++) {
@@ -1079,15 +1331,13 @@ function initAmbientEffects() {
         }
     }
 
-    // 2. Pollen (Version GÉANTE pour rotation)
     const pollenContainer = document.getElementById('pollen-overlay');
     if (pollenContainer) {
-        pollenContainer.innerHTML = ''; // Reset
+        pollenContainer.innerHTML = ''; 
         for (let i = 0; i < 40; i++) {
             const p = document.createElement('div');
             p.className = 'pollen';
             
-            // Random dans le conteneur 200%
             p.style.left = Math.random() * 100 + '%';
             p.style.top = Math.random() * 100 + '%';
             p.style.animationDelay = Math.random() * 10 + 's';
@@ -1095,7 +1345,68 @@ function initAmbientEffects() {
             
             pollenContainer.appendChild(p);
         }
-        // Mise à jour immédiate
         setTimeout(updateWindVisuals, 500);
     }
+}
+
+// --- LOGIQUE GÉNÉRIQUE DES BOUTONS SLIDER (GLISSER POUR VALIDER) ---
+function createSwipeAction(containerId, thumbId, textId, onActionCallback) {
+    const container = document.getElementById(containerId);
+    const thumb = document.getElementById(thumbId);
+    const text = document.getElementById(textId);
+    if (!container || !thumb) return;
+
+    let isDragging = false;
+    let startX = 0;
+    let maxTravel = 0;
+
+    const startDrag = (e) => {
+        isDragging = true;
+        thumb.style.transition = 'none'; 
+        maxTravel = container.clientWidth - thumb.clientWidth - 10; 
+        startX = e.type.includes('mouse') ? e.clientX : e.touches[0].clientX;
+    };
+
+    const drag = (e) => {
+        if (!isDragging) return;
+        let currentX = e.type.includes('mouse') ? e.clientX : e.touches[0].clientX;
+        let diffX = currentX - startX;
+
+        // On bloque le bouton pour qu'il reste dans son conteneur
+        if (diffX < 0) diffX = 0;
+        if (diffX > maxTravel) diffX = maxTravel;
+
+        thumb.style.transform = `translateX(${diffX}px)`;
+        if (text) text.style.opacity = 1 - (diffX / maxTravel);
+    };
+
+    const endDrag = () => {
+        if (!isDragging) return;
+        isDragging = false;
+        
+        // On remet l'animation pour un retour fluide
+        thumb.style.transition = 'transform 0.3s ease';
+
+        const transform = thumb.style.transform;
+        const match = transform.match(/translateX\((.*)px\)/);
+        const diffX = match ? parseFloat(match[1]) : 0;
+
+        // Si glissé à plus de 85%, on valide l'action !
+        if (diffX > maxTravel * 0.85) {
+            onActionCallback();
+        }
+
+        // On réinitialise l'apparence
+        thumb.style.transform = `translateX(0px)`;
+        if (text) text.style.opacity = 1;
+    };
+
+    // Écouteurs pour la souris et le tactile
+    thumb.addEventListener('mousedown', startDrag);
+    thumb.addEventListener('touchstart', startDrag, { passive: true });
+
+    document.addEventListener('mousemove', drag);
+    document.addEventListener('touchmove', drag, { passive: true });
+    document.addEventListener('mouseup', endDrag);
+    document.addEventListener('touchend', endDrag);
 }

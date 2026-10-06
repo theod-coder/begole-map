@@ -10,11 +10,12 @@ import { initAudio } from './audio.js';
 import { updateUserLevel, initDailyTrophy } from './gamification.js';
 import { checkCrashRecovery, initTracking } from './tracking.js';
 import { cleanDuplicates } from './utils.js';
+import { APP_VERSION } from './config.js';
 
 // --- DÉMARRAGE DE L'APPLICATION ---
 
 async function startApp() {
-    console.log("🚀 Démarrage de Bégole Map v4.2 (Architecture Modulaire)...");
+    console.log(`🚀 Démarrage de Bégole Map v${APP_VERSION} (Outdoor Pro Edition)...`);
 
     try {
         // 1. Initialisation de la Base de Données

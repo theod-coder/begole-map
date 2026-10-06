@@ -1,5 +1,5 @@
 import { VILLAGE_COORDS, DEFAULT_ZOOM, SECRET_EMOJIS } from './config.js';
-import { showToast, triggerHaptic, getSpeedColor } from './utils.js';
+import { showToast, triggerHaptic, getSpeedColor, calculateBearing } from './utils.js';
 
 // --- Variables Globales du Module ---
 let map = null;
@@ -9,12 +9,25 @@ let parcelsLayer = null;
 let villageLayer = null;
 let heatLayer = null;
 let tracksLayer = null;
+let radarLayer = null;
+let begoledexLayer = null;
+let measureLayer = null;
+
+// Variables Mesure
+let isMeasuring = false;
+let measurePoints = [];
 
 // Variables Replay
 let replayTimer = null;
 let replayMarker = null;
 let replayTraceLayer = null;
 let replayBgPolyline = null;
+let replaySpeedMultiplier = 1;
+let isReplayPaused = false;
+let replayCurrentTrip = null;
+let replayCurrentIndex = 0;
+let replayStepIncrement = 1;
+let replayDelay = 50;
 
 // Callbacks pour communiquer avec l'UI (évite les dépendances circulaires)
 let uiCallbacks = {
@@ -88,9 +101,17 @@ export function initMap() {
 
     tracksLayer = L.layerGroup().addTo(map);
     parcelsLayer = L.layerGroup();
+    radarLayer = L.layerGroup().addTo(map);
+    begoledexLayer = L.layerGroup();
+    measureLayer = L.layerGroup().addTo(map);
 
     // 5. Clics
     map.on('click', (e) => {
+        if (isMeasuring) {
+            handleMeasureClick(e.latlng);
+            return;
+        }
+
         const isCadastreActive = map.hasLayer(cadastreLayer) && document.getElementById('cadastre-mode-toggle').checked;
         
         if (isCadastreActive) {
@@ -315,7 +336,9 @@ export function updateCadastreOpacity(val) {
 
 function fetchParcelAt(latlng) {
     document.body.style.cursor = 'wait';
-    const url = `https://apicarto.ign.fr/api/cadastre/parcelle?geom={"type":"Point","coordinates":[${latlng.lng},${latlng.lat}]}`;
+    const lng = Number(latlng.lng).toFixed(6);
+    const lat = Number(latlng.lat).toFixed(6);
+    const url = `https://apicarto.ign.fr/api/cadastre/parcelle?geom={"type":"Point","coordinates":[${lng},${lat}]}`;
     
     fetch(url)
         .then(r => r.ok ? r.json() : null)
@@ -439,10 +462,15 @@ export function displaySingleTrip(trip, colorCode = '#e74c3c') {
 }
 
 /**
- * Lance l'animation de replay d'un trajet
+ * Lance l'animation de replay d'un trajet avec contrôle de vitesse
  */
-export function startReplay(trip) {
+export function startReplay(trip, speedMultiplier = 1) {
     if (!trip || !trip.points || trip.points.length < 2) return;
+
+    replayCurrentTrip = trip;
+    replaySpeedMultiplier = speedMultiplier;
+    isReplayPaused = false;
+    replayCurrentIndex = 0;
 
     // Nettoyage préalable
     tracksLayer.clearLayers();
@@ -464,7 +492,7 @@ export function startReplay(trip) {
     const startPt = trip.points[0];
     const hikerIcon = L.divIcon({ 
         className: 'hiker-icon-marker', 
-        html: '🚶', // Emoji simple, safe
+        html: '🚶',
         iconSize: [30, 30], 
         iconAnchor: [15, 28] 
     });
@@ -473,44 +501,82 @@ export function startReplay(trip) {
     // Paramètres Animation
     const TARGET_DURATION = 20000;
     const totalPoints = trip.points.length;
-    let delay = TARGET_DURATION / totalPoints;
-    let stepIncrement = 1;
-    const MIN_DELAY = 15;
+    replayDelay = (TARGET_DURATION / totalPoints) / replaySpeedMultiplier;
+    replayStepIncrement = 1;
+    const MIN_DELAY = 12;
 
-    if (delay < MIN_DELAY) {
-        stepIncrement = Math.ceil(MIN_DELAY / delay);
-        delay = MIN_DELAY;
+    if (replayDelay < MIN_DELAY) {
+        replayStepIncrement = Math.ceil(MIN_DELAY / replayDelay);
+        replayDelay = MIN_DELAY;
     }
 
-    let i = 0;
-    function nextStep() {
-        if (i >= trip.points.length) {
-            stopReplay();
-            uiCallbacks.onReplayFinished();
-            return;
-        }
+    runReplayLoop();
+}
 
-        const pt = trip.points[i];
-        const latLng = [pt[0], pt[1]];
-        replayMarker.setLatLng(latLng);
+function runReplayLoop() {
+    if (!replayCurrentTrip) return;
 
-        // On trace le segment parcouru coloré selon la vitesse
-        if (i > 0) {
-            let prevIndex = i - stepIncrement;
-            if (prevIndex < 0) prevIndex = 0;
-            const prevPt = trip.points[prevIndex];
-            const speed = pt[3]; // Vitesse enregistrée
-            const color = getSpeedColor(speed);
-            
+    if (isReplayPaused) {
+        replayTimer = setTimeout(runReplayLoop, 200);
+        return;
+    }
+
+    if (replayCurrentIndex >= replayCurrentTrip.points.length) {
+        stopReplay();
+        uiCallbacks.onReplayFinished();
+        return;
+    }
+
+    const pt = replayCurrentTrip.points[replayCurrentIndex];
+    const latLng = [pt[0], pt[1]];
+    if (replayMarker) replayMarker.setLatLng(latLng);
+
+    // Tracé dynamique selon vitesse
+    if (replayCurrentIndex > 0) {
+        let prevIndex = replayCurrentIndex - replayStepIncrement;
+        if (prevIndex < 0) prevIndex = 0;
+        const prevPt = replayCurrentTrip.points[prevIndex];
+        const speed = pt[3] || 0;
+        const color = getSpeedColor(speed);
+        
+        if (replayTraceLayer) {
             L.polyline([[prevPt[0], prevPt[1]], latLng], { 
                 color: color, weight: 5, opacity: 0.9, lineCap: 'round' 
             }).addTo(replayTraceLayer);
         }
-
-        i += stepIncrement;
-        replayTimer = setTimeout(nextStep, delay);
     }
-    nextStep();
+
+    // Mise à jour de la progression
+    const progressPercent = Math.min(100, Math.round((replayCurrentIndex / replayCurrentTrip.points.length) * 100));
+    document.dispatchEvent(new CustomEvent('replay-progress', { detail: { percent: progressPercent } }));
+
+    replayCurrentIndex += replayStepIncrement;
+    replayTimer = setTimeout(runReplayLoop, replayDelay);
+}
+
+/**
+ * Modifie la vitesse de replay en direct
+ */
+export function setReplaySpeed(multiplier) {
+    replaySpeedMultiplier = multiplier;
+    if (replayCurrentTrip) {
+        const totalPoints = replayCurrentTrip.points.length;
+        replayDelay = (20000 / totalPoints) / replaySpeedMultiplier;
+        if (replayDelay < 12) {
+            replayStepIncrement = Math.ceil(12 / replayDelay);
+            replayDelay = 12;
+        } else {
+            replayStepIncrement = 1;
+        }
+    }
+}
+
+/**
+ * Met en pause ou reprend le replay
+ */
+export function toggleReplayPause() {
+    isReplayPaused = !isReplayPaused;
+    return isReplayPaused;
 }
 
 /**
@@ -518,6 +584,9 @@ export function startReplay(trip) {
  */
 export function stopReplay() {
     if (replayTimer) { clearTimeout(replayTimer); replayTimer = null; }
+    replayCurrentTrip = null;
+    isReplayPaused = false;
+    replayCurrentIndex = 0;
     
     if (replayMarker) { map.removeLayer(replayMarker); replayMarker = null; }
     if (replayBgPolyline) { map.removeLayer(replayBgPolyline); replayBgPolyline = null; }
@@ -528,13 +597,9 @@ export function stopReplay() {
  * Nettoie tous les tracés et réaffiche les points
  */
 export function clearTracksAndShowPoints() {
-    // 1. On efface les tracés statiques
     if (tracksLayer) tracksLayer.clearLayers();
-    
-    // 2. On arrête le replay et nettoie ses calques
     stopReplay();
     
-    // 3. On réaffiche les points (si le mode cadastre ne l'interdit pas)
     const isCadastreActive = document.getElementById('cadastre-mode-toggle')?.checked;
     const isParcelsActive = document.getElementById('show-parcels-toggle')?.checked;
     
@@ -543,6 +608,184 @@ export function clearTracksAndShowPoints() {
     }
     
     showToast("Carte nettoyée ✨");
+}
+
+// ============================================================
+// --- GESTION DU RADAR VISUEL ---
+// ============================================================
+
+let radarCircle = null;
+let radarPulseCircle = null;
+
+export function updateRadarDisplay(latlng, radius = 40, isAlert = false) {
+    if (!map) return;
+    if (!radarLayer) radarLayer = L.layerGroup().addTo(map);
+
+    const strokeColor = isAlert ? '#e74c3c' : '#3498db';
+    const fillColor = isAlert ? '#e74c3c' : '#2980b9';
+
+    if (!radarCircle) {
+        radarCircle = L.circle(latlng, {
+            radius: radius,
+            color: strokeColor,
+            weight: 2,
+            dashArray: '5, 5',
+            fillColor: fillColor,
+            fillOpacity: isAlert ? 0.25 : 0.12,
+            className: 'radar-ring'
+        }).addTo(radarLayer);
+
+        radarPulseCircle = L.circle(latlng, {
+            radius: radius * 0.75,
+            color: strokeColor,
+            weight: 1,
+            fillColor: fillColor,
+            fillOpacity: 0.08,
+            className: 'radar-pulse'
+        }).addTo(radarLayer);
+    } else {
+        radarCircle.setLatLng(latlng);
+        radarCircle.setRadius(radius);
+        radarCircle.setStyle({
+            color: strokeColor,
+            fillColor: fillColor,
+            fillOpacity: isAlert ? 0.25 : 0.12
+        });
+
+        if (radarPulseCircle) {
+            radarPulseCircle.setLatLng(latlng);
+            radarPulseCircle.setRadius(radius * 0.75);
+            radarPulseCircle.setStyle({ color: strokeColor, fillColor: fillColor });
+        }
+    }
+}
+
+export function removeRadarDisplay() {
+    if (radarLayer) {
+        radarLayer.clearLayers();
+        radarCircle = null;
+        radarPulseCircle = null;
+    }
+}
+
+// ============================================================
+// --- BÉGOLEDEX SUR CARTE ---
+// ============================================================
+
+export function toggleBegoledexOnMap(isActive, plants = []) {
+    if (!begoledexLayer) begoledexLayer = L.layerGroup();
+
+    if (isActive) {
+        begoledexLayer.clearLayers();
+        let placedCount = 0;
+
+        plants.forEach(plant => {
+            if (plant.lat && plant.lng) {
+                placedCount++;
+                const icon = L.divIcon({
+                    className: 'begoledex-map-marker',
+                    html: `<div class="begoledex-marker-bubble">🌿</div>`,
+                    iconSize: [32, 32],
+                    iconAnchor: [16, 16]
+                });
+
+                const marker = L.marker([plant.lat, plant.lng], { icon });
+                const popupContent = document.createElement('div');
+                popupContent.style.textAlign = 'center';
+                popupContent.style.minWidth = '160px';
+
+                popupContent.innerHTML = `
+                    <img src="${plant.image}" style="width:100%; height:90px; object-fit:cover; border-radius:8px; margin-bottom:5px;">
+                    <b style="font-size:13px; color:#27ae60;">${plant.name}</b><br>
+                    <small style="font-style:italic; color:#777;">${plant.sciName}</small><br>
+                    <span style="font-size:10px; color:#999;">Trouvée le ${plant.date} • Confiance : ${plant.score}%</span>
+                `;
+
+                marker.bindPopup(popupContent);
+                begoledexLayer.addLayer(marker);
+            }
+        });
+
+        if (!map.hasLayer(begoledexLayer)) begoledexLayer.addTo(map);
+        showToast(`Bégoledex : ${placedCount} plante${placedCount > 1 ? 's' : ''} sur la carte 🌱`);
+    } else {
+        if (map.hasLayer(begoledexLayer)) map.removeLayer(begoledexLayer);
+    }
+}
+
+// ============================================================
+// --- OUTIL DE MESURE DE DISTANCE (RÈGLE / TÉLÉMÈTRE) ---
+// ============================================================
+
+export function toggleMeasureTool(activate) {
+    isMeasuring = (activate !== undefined) ? activate : !isMeasuring;
+    if (!measureLayer) measureLayer = L.layerGroup().addTo(map);
+
+    if (isMeasuring) {
+        clearMeasurement();
+        if (map) map.getContainer().style.cursor = 'crosshair';
+        showToast("📏 Mode Mesure : Clique sur la carte pour mesurer");
+    } else {
+        clearMeasurement();
+        if (map) map.getContainer().style.cursor = '';
+        showToast("Mode Mesure désactivé");
+    }
+    return isMeasuring;
+}
+
+export function clearMeasurement() {
+    measurePoints = [];
+    if (measureLayer) measureLayer.clearLayers();
+}
+
+function handleMeasureClick(latlng) {
+    if (!measureLayer) measureLayer = L.layerGroup().addTo(map);
+    measurePoints.push(latlng);
+    const count = measurePoints.length;
+
+    // Point
+    const marker = L.circleMarker(latlng, {
+        radius: 6,
+        color: '#e67e22',
+        fillColor: '#ffffff',
+        fillOpacity: 1,
+        weight: 3
+    }).addTo(measureLayer);
+
+    if (count > 1) {
+        // Ligne
+        L.polyline(measurePoints, {
+            color: '#e67e22',
+            weight: 3,
+            dashArray: '6, 6'
+        }).addTo(measureLayer);
+
+        let totalMeters = 0;
+        for (let i = 1; i < count; i++) {
+            totalMeters += map.distance(measurePoints[i-1], measurePoints[i]);
+        }
+
+        const segDist = map.distance(measurePoints[count-2], measurePoints[count-1]);
+        const bearing = calculateBearing(
+            measurePoints[count-2].lat, measurePoints[count-2].lng,
+            measurePoints[count-1].lat, measurePoints[count-1].lng
+        );
+
+        const totalStr = totalMeters >= 1000 ? `${(totalMeters/1000).toFixed(2)} km` : `${Math.round(totalMeters)} m`;
+        const segStr = segDist >= 1000 ? `${(segDist/1000).toFixed(2)} km` : `${Math.round(segDist)} m`;
+
+        marker.bindTooltip(`Total : <b>${totalStr}</b><br>Segment : ${segStr} (${Math.round(bearing)}°)`, {
+            permanent: true,
+            direction: 'top',
+            className: 'measure-tooltip'
+        }).openTooltip();
+    } else {
+        marker.bindTooltip("Départ (0 m)", {
+            permanent: true,
+            direction: 'top',
+            className: 'measure-tooltip'
+        }).openTooltip();
+    }
 }
 
 // --- Utilitaires Géométrie ---

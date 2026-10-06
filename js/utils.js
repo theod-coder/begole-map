@@ -198,13 +198,217 @@ export function getRandomColor() {
     return color;
 }
 
-// Fonction de nettoyage (à mettre dans utils.js par exemple)
+// Fonction de nettoyage (anti-XSS)
 export function escapeHtml(text) {
-    if (!text) return text;
+    if (!text) return "";
     return text
+        .toString()
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
+}
+
+/**
+ * Calcule la distance orthodromique (Haversine) en mètres entre 2 coordonnées
+ */
+export function calculateDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371e3; // Rayon Terre en mètres
+    const φ1 = lat1 * Math.PI / 180;
+    const φ2 = lat2 * Math.PI / 180;
+    const Δφ = (lat2 - lat1) * Math.PI / 180;
+    const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+              Math.cos(φ1) * Math.cos(φ2) *
+              Math.sin(Δλ/2) * Math.sin(Δλ/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+}
+
+/**
+ * Calcule le cap (azimut) en degrés (0-360°)
+ */
+export function calculateBearing(lat1, lon1, lat2, lon2) {
+    const φ1 = lat1 * Math.PI / 180;
+    const φ2 = lat2 * Math.PI / 180;
+    const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+    const y = Math.sin(Δλ) * Math.cos(φ2);
+    const x = Math.cos(φ1) * Math.sin(φ2) -
+              Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+    const θ = Math.atan2(y, x);
+    return (θ * 180 / Math.PI + 360) % 360;
+}
+
+/**
+ * Convertit des coordonnées décimales en Degrés Minutes Secondes (DMS)
+ */
+export function toDMS(deg, isLat) {
+    const absolute = Math.abs(deg);
+    const degrees = Math.floor(absolute);
+    const minutesNotTruncated = (absolute - degrees) * 60;
+    const minutes = Math.floor(minutesNotTruncated);
+    const seconds = Math.floor((minutesNotTruncated - minutes) * 60);
+
+    const direction = isLat ? (deg >= 0 ? "N" : "S") : (deg >= 0 ? "E" : "O");
+    return `${degrees}°${pad(minutes)}'${pad(seconds)}" ${direction}`;
+}
+
+/**
+ * Exporte un trajet au format GPX 1.1 standard
+ * @param {Object} trip - Données du trajet
+ */
+export function exportTripToGPX(trip) {
+    if (!trip || !trip.points || trip.points.length === 0) {
+        showToast("Impossible d'exporter un trajet vide");
+        return;
+    }
+
+    const tripName = trip.note ? `Bégole - ${escapeHtml(trip.note)}` : `Trajet Bégole ${new Date(trip.date).toLocaleDateString()}`;
+    const startTime = new Date(trip.date || Date.now()).toISOString();
+
+    let trkpts = "";
+    trip.points.forEach((p, idx) => {
+        const lat = p[0];
+        const lon = p[1];
+        const ele = p[2] !== undefined && p[2] !== null ? `<ele>${p[2]}</ele>` : "";
+        // Temps estimé si absent
+        const ptTime = new Date(new Date(trip.date).getTime() + (idx * 2000)).toISOString();
+        trkpts += `      <trkpt lat="${lat}" lon="${lon}">\n        ${ele}\n        <time>${ptTime}</time>\n      </trkpt>\n`;
+    });
+
+    const gpxData = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Bégole Map - https://begole-map.app" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>${tripName}</name>
+    <time>${startTime}</time>
+  </metadata>
+  <trk>
+    <name>${tripName}</name>
+    <trkseg>
+${trkpts}    </trkseg>
+  </trk>
+</gpx>`;
+
+    const blob = new Blob([gpxData], { type: 'application/gpx+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const safeDate = new Date(trip.date).toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `Begole_Trajet_${safeDate}_${trip.id}.gpx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast("Fichier GPX téléchargé 🥾");
+}
+
+/**
+ * Parse un fichier GPX et extrait les points et métadonnées
+ * @param {string} xmlText 
+ * @returns {Object} { points, distance, elevationGain, name }
+ */
+export function parseGPX(xmlText) {
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+    const trkpts = xmlDoc.querySelectorAll("trkpt");
+
+    if (!trkpts || trkpts.length === 0) {
+        throw new Error("Aucun point de trace GPX trouvé");
+    }
+
+    const points = [];
+    let totalDist = 0;
+    let elevGain = 0;
+    let lastAlt = null;
+    let lastLat = null;
+    let lastLng = null;
+
+    trkpts.forEach(node => {
+        const lat = parseFloat(node.getAttribute("lat"));
+        const lon = parseFloat(node.getAttribute("lon"));
+        const eleNode = node.querySelector("ele");
+        const ele = eleNode ? parseFloat(eleNode.textContent) : 0;
+
+        if (!isNaN(lat) && !isNaN(lon)) {
+            points.push([lat, lon, ele, 0]);
+
+            if (lastLat !== null) {
+                const segDist = calculateDistance(lastLat, lastLng, lat, lon) / 1000;
+                totalDist += segDist;
+            }
+            if (lastAlt !== null && ele > lastAlt && (ele - lastAlt) > 2) {
+                elevGain += (ele - lastAlt);
+            }
+            lastLat = lat;
+            lastLng = lon;
+            lastAlt = ele;
+        }
+    });
+
+    const nameNode = xmlDoc.querySelector("trk > name, metadata > name");
+    const name = nameNode ? nameNode.textContent : "Trace GPX importée";
+
+    return {
+        name,
+        points,
+        distance: totalDist,
+        elevationGain: Math.round(elevGain)
+    };
+}
+
+/**
+ * Synthétiseur audio Web Audio API pour les signaux sonores (Radar, Succès, Alertes)
+ */
+let audioCtx = null;
+export function playAudioCue(type = 'ping') {
+    try {
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume();
+        }
+
+        const now = audioCtx.currentTime;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        if (type === 'radar') {
+            // Sonar sonar ping doux
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(880, now);
+            osc.frequency.exponentialRampToValueAtTime(1760, now + 0.15);
+            gain.gain.setValueAtTime(0.15, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+            osc.start(now);
+            osc.stop(now + 0.35);
+        } else if (type === 'success') {
+            // Fanfare 2 notes
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(523.25, now); // C5
+            osc.frequency.setValueAtTime(659.25, now + 0.1); // E5
+            osc.frequency.setValueAtTime(783.99, now + 0.2); // G5
+            gain.gain.setValueAtTime(0.2, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+            osc.start(now);
+            osc.stop(now + 0.55);
+        } else if (type === 'nature') {
+            // Gazouillis rapide oiseau
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(1500, now);
+            osc.frequency.exponentialRampToValueAtTime(2800, now + 0.08);
+            osc.frequency.exponentialRampToValueAtTime(1900, now + 0.15);
+            gain.gain.setValueAtTime(0.12, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+            osc.start(now);
+            osc.stop(now + 0.25);
+        }
+    } catch (e) {
+        // Silencieux si audio non autorisé
+    }
 }

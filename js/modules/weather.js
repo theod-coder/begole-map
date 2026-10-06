@@ -64,7 +64,7 @@ export function updateWeatherWidget() {
         lng = appState.userPosition.lng;
     }
 
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,precipitation,weather_code,wind_speed_10m,is_day&daily=sunrise,sunset&timezone=auto`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m,is_day&daily=sunrise,sunset&timezone=auto`;
 
     fetch(url)
         .then(r => r.ok ? r.json() : null)
@@ -73,7 +73,8 @@ export function updateWeatherWidget() {
             
             const temp = Math.round(data.current.temperature_2m);
             const code = data.current.weather_code;
-            const wind = data.current.wind_speed_10m;
+            const wind = Math.round(data.current.wind_speed_10m || 0);
+            const windDir = Math.round(data.current.wind_direction_10m || 0);
             const isDay = data.current.is_day === 1;
 
             const sunrise = data.daily.sunrise[0];
@@ -87,42 +88,52 @@ export function updateWeatherWidget() {
             else if (code >= 71 && code <= 77) desc = "❄️ Neige";
             else if (code >= 95) desc = "⚡ Orage";
 
-            // --- MISE À JOUR ROBUSTE DE L'INTERFACE ---
-            // On reconstruit le HTML du widget pour être sûr que le vent s'affiche
+            // Direction cardinale
+            const cardinals = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
+            const cardIndex = Math.round(windDir / 45) % 8;
+            const cardStr = cardinals[cardIndex];
+
+            // Mise à jour État Global
+            updateEnv('temp', temp);
+            updateEnv('weather', desc);
+            updateEnv('wind', wind);
+            updateEnv('windSpeed', wind);
+            updateEnv('windDir', windDir);
+            updateEnv('isDay', isDay);
+            updateEnv('sunrise', sunrise);
+            updateEnv('sunset', sunset);
+
+            // Mise à jour du widget DOM
             const widget = document.getElementById('weather-widget-btn');
             if (widget) {
-                // On force le style colonne ici aussi par sécurité
                 widget.style.flexDirection = 'column';
                 widget.style.justifyContent = 'center';
                 widget.style.padding = '5px';
 
                 widget.innerHTML = `
                     <div class="env-row" style="margin:0; width: 100%; justify-content: space-around; display:flex;">
-                        <div style="font-size:11px;">${desc}</div>
-                        <div style="font-size:12px;">🌡️ ${temp}°C</div>
+                        <div id="weather-desc" style="font-size:11px;">${desc}</div>
+                        <div id="weather-temp" style="font-size:12px;">🌡️ ${temp}°C</div>
                     </div>
-                    <div style="font-size:10px; width: 100%; text-align:center; border-top:1px solid rgba(255,255,255,0.3); margin-top:3px; padding-top:2px;">
-                        💨 ${Math.round(wind)} km/h
+                    <div id="weather-wind" style="font-size:10px; width: 100%; text-align:center; border-top:1px solid rgba(255,255,255,0.3); margin-top:3px; padding-top:2px;">
+                        💨 ${wind} km/h (${cardStr} ${windDir}°)
                     </div>
                 `;
             }
-
-            // Mise à jour État Global
-            updateEnv('temp', temp);
-            updateEnv('weather', desc);
-            updateEnv('wind', wind);
-            updateEnv('isDay', isDay);
-            updateEnv('sunrise', sunrise);
-            updateEnv('sunset', sunset);
 
             updateAudioWeather(desc);
             
             // Thèmes & Effets
             applyDynamicTheme(sunrise, sunset, isDay);
             triggerWeatherEffect(desc);
-            updateWindVisuals(wind > 20);
+            updateWindVisuals();
 
-            // Mise à jour Astro (soleil) maintenant qu'on a les heures
+            // Notifier les écouteurs
+            document.dispatchEvent(new CustomEvent('weather-updated', {
+                detail: { temp, desc, wind, windDir, isDay }
+            }));
+
+            // Mise à jour Astro (soleil)
             updateAstroWidget();
         })
         .catch(console.error);

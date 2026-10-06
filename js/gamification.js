@@ -1,5 +1,6 @@
 import { VILLAGE_COORDS } from './config.js';
-import { showToast, triggerHaptic, pad } from './utils.js';
+import { showToast, triggerHaptic, pad, playAudioCue } from './utils.js';
+import { appState, addBonusXp } from './state.js';
 
 // --- État interne Trophée ---
 let trophyMarker = null;
@@ -19,9 +20,11 @@ export function updateUserLevel(points = [], trips = []) {
     const totalPoints = points.length;
     const totalKm = trips.reduce((acc, t) => acc + (t.distance || 0), 0);
     const totalHistory = points.reduce((acc, p) => acc + (p.history ? p.history.length : 0), 0);
+    const totalPlants = (appState && appState.begoledex) ? appState.begoledex.length : 0;
+    const bonusXp = (appState && appState.bonusXp) ? appState.bonusXp : parseInt(localStorage.getItem('begole_bonus_xp') || '0', 10);
 
-    // Formule : 100xp par point, 50xp par km, 10xp par note
-    const xp = Math.floor((totalPoints * 100) + (totalKm * 50) + (totalHistory * 10));
+    // Formule : 100xp/pt, 50xp/km, 10xp/note carnet, 30xp/plante Bégoledex + Bonus trophées
+    const xp = Math.floor((totalPoints * 100) + (totalKm * 50) + (totalHistory * 10) + (totalPlants * 30) + bonusXp);
 
     // Calcul du niveau (Palier tous les 500 + increment)
     let level = 1;
@@ -123,7 +126,12 @@ export function showAchievements(points = [], trips = []) {
             { id: 'winter', icon: '❄️', title: 'Yéti', desc: 'Sortie en Hiver (Déc-Fév)', check: () => points.some(p => { const m = new Date(p.id).getMonth(); return m === 11 || m === 0 || m === 1; }) },
             { id: 'writer', icon: '✍️', title: 'Romancier', desc: '20 notes dans le carnet', check: () => totalHistory >= 20 },
             { id: 'veteran', icon: '🎖️', title: 'Vétéran', desc: 'Utilise l\'app depuis 1 an', check: () => daysSinceStart >= 365 },
-            { id: 'addict', icon: '🔥', title: 'Accro', desc: '50 trajets enregistrés', check: () => totalTrips >= 50 }
+            { id: 'addict', icon: '🔥', title: 'Accro', desc: '50 trajets enregistrés', check: () => totalTrips >= 50 },
+            { id: 'trophy', icon: '🏆', title: 'Chasseur de Trésor', desc: 'A trouvé un trophée du jour', check: () => parseInt(localStorage.getItem('begole_trophies_won') || '0', 10) >= 1 },
+            { id: 'herboriste', icon: '🌸', title: 'Herboriste', desc: '3 plantes au Bégoledex', check: () => (appState.begoledex || []).length >= 3 },
+            { id: 'botaniste', icon: '🌿', title: 'Botaniste Émérite', desc: '10 plantes au Bégoledex', check: () => (appState.begoledex || []).length >= 10 },
+            { id: 'cadastre', icon: '📐', title: 'Arpenteur', desc: '5 parcelles cadastre sauvées', check: () => (appState.parcels || []).length >= 5 },
+            { id: 'pisteur', icon: '🐾', title: 'Pisteur des Bois', desc: 'A consulté le guide du pisteur', check: () => localStorage.getItem('begole_pisteur_viewed') === 'true' }
         ];
 
         // Génération HTML
@@ -256,17 +264,25 @@ function claimTrophy(map) {
         claimed: true
     }));
 
+    const wonCount = parseInt(localStorage.getItem('begole_trophies_won') || '0', 10) + 1;
+    localStorage.setItem('begole_trophies_won', wonCount);
+
+    // Attribution bonus XP (+150 XP)
+    addBonusXp(150);
+    updateUserLevel(appState.points, appState.trips);
+
     // Suppression marqueur
     if (trophyMarker) map.removeLayer(trophyMarker);
 
     // Feedback
     triggerHaptic('success');
-    showToast("🏆 TROPHÉE GAGNÉ ! +50 XP");
+    playAudioCue('success');
+    showToast("🏆 TROPHÉE DÉCOUVERT ! +150 XP");
     
-    // Petit délai pour l'alerte native
+    // Alerte native
     setTimeout(() => {
-        alert("🎉 BRAVO !\nTu as atteint l'objectif du jour.");
-    }, 500);
+        alert("🎉 FÉLICITATIONS !\nTu as trouvé le trophée caché du jour à Bégole (+150 XP).");
+    }, 400);
 }
 
 // --- UTILITAIRES GÉOMÉTRIQUES ---
