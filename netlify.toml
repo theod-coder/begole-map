@@ -1,5 +1,5 @@
 [build]
-  base = "Projet Carte Bégole"
+  base = "/"
   publish = "."
   ignore = "false"
 
