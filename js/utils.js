@@ -1,39 +1,27 @@
+// =========================================
+// UTILITAIRES GÉNÉRAUX, GÉOMÉTRIE & EXPORT
+// =========================================
+
 /**
  * Affiche une notification temporaire (Toast) en bas de l'écran
  * @param {string} message - Le texte à afficher
- * @param {number} duration - Durée en ms (défaut: 3000)
+ * @param {number} duration - Durée en ms (défaut: 2800)
  */
-export function showToast(message, duration = 3000) {
+export function showToast(message, duration = 2800) {
     const container = document.getElementById('toast-container');
     if (!container) return;
 
     const toast = document.createElement('div');
-    toast.className = 'toast-msg'; // Assurez-vous d'avoir ce style dans CSS
-    toast.innerText = message;
-    
-    // Style par défaut si pas dans le CSS
-    if (!toast.classList.contains('toast-msg')) {
-        Object.assign(toast.style, {
-            background: 'rgba(0,0,0,0.8)',
-            color: 'white',
-            padding: '12px 24px',
-            borderRadius: '25px',
-            marginTop: '10px',
-            boxShadow: '0 4px 10px rgba(0,0,0,0.3)',
-            animation: 'fadeIn 0.3s forwards',
-            fontSize: '14px',
-            backdropFilter: 'blur(4px)'
-        });
-    }
+    toast.className = 'toast show';
+    toast.textContent = message;
 
     container.appendChild(toast);
 
-    // Suppression automatique
     setTimeout(() => {
+        toast.classList.remove('show');
         toast.style.opacity = '0';
-        toast.style.transform = 'translateY(10px)';
-        toast.style.transition = 'all 0.5s ease';
-        setTimeout(() => toast.remove(), 500);
+        toast.style.transform = 'translateY(12px)';
+        setTimeout(() => toast.remove(), 350);
     }, duration);
 }
 
@@ -46,39 +34,39 @@ export function triggerHaptic(type) {
 
     switch (type) {
         case 'success':
-            navigator.vibrate([50, 50, 50]); // Deux petits coups
+            navigator.vibrate([40, 40, 40]);
             break;
         case 'warning':
-            navigator.vibrate(200); // Un coup moyen
+            navigator.vibrate(180);
             break;
         case 'error':
-            navigator.vibrate([100, 50, 100, 50, 100]); // Trois coups
+            navigator.vibrate([100, 50, 100, 50, 100]);
             break;
         case 'start':
-            navigator.vibrate([50, 100, 200]); // Montée en puissance
+            navigator.vibrate([50, 80, 160]);
             break;
         default:
-            navigator.vibrate(50); // Touche simple
+            navigator.vibrate(35);
     }
 }
 
 /**
  * Ajoute un zéro devant les chiffres < 10 (ex: 9 -> "09")
- * @param {number} n 
+ * @param {number} n
  * @returns {string}
  */
 export function pad(n) {
-    return n < 10 ? '0' + n : n;
+    return n < 10 ? '0' + n : '' + n;
 }
 
 /**
- * Formate une durée en millisecondes vers MM:SS ou HH:MM:SS
- * @param {number} ms 
+ * Formate une durée en millisecondes vers MM:SS ou HHh MMm
+ * @param {number} ms
  * @returns {string}
  */
 export function formatDuration(ms) {
     if (!ms || ms < 0) return "00:00";
-    
+
     let seconds = Math.floor(ms / 1000);
     let minutes = Math.floor(seconds / 60);
     let hours = Math.floor(minutes / 60);
@@ -99,21 +87,20 @@ export function formatDuration(ms) {
  * @returns {string} Code couleur Hex
  */
 export function getSpeedColor(speedMs) {
-    if (speedMs === null || speedMs === undefined) return '#95a5a6'; // Gris
-    
+    if (speedMs === null || speedMs === undefined) return '#95a5a6';
+
     const speedKmh = speedMs * 3.6;
 
-    if (speedKmh < 1) return '#bdc3c7'; // À l'arrêt (Gris clair)
-    if (speedKmh < 4) return '#3498db'; // Marche lente (Bleu)
-    if (speedKmh < 7) return '#2ecc71'; // Marche active (Vert)
-    if (speedKmh < 15) return '#f1c40f'; // Course (Jaune)
-    if (speedKmh < 30) return '#e67e22'; // Vélo (Orange)
-    return '#e74c3c'; // Rapide / Voiture (Rouge)
+    if (speedKmh < 1) return '#bdc3c7';  // À l'arrêt
+    if (speedKmh < 4) return '#3498db';  // Marche lente
+    if (speedKmh < 7) return '#2ecc71';  // Marche active
+    if (speedKmh < 15) return '#f1c40f'; // Course
+    if (speedKmh < 30) return '#e67e22'; // Vélo
+    return '#e74c3c';                    // Rapide
 }
 
 /**
  * Compresse une image avant stockage (Redimensionnement + JPEG)
- * Indispensable pour ne pas saturer le stockage IndexedDB
  * @param {File} file - Fichier image input
  * @param {number} maxWidth - Largeur max (ex: 800px)
  * @param {number} quality - Qualité JPEG (0 à 1)
@@ -123,17 +110,16 @@ export function compressImage(file, maxWidth = 800, quality = 0.7) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.readAsDataURL(file);
-        
+
         reader.onload = (event) => {
             const img = new Image();
             img.src = event.target.result;
-            
+
             img.onload = () => {
                 const canvas = document.createElement('canvas');
                 let width = img.width;
                 let height = img.height;
 
-                // Redimensionnement proportionnel
                 if (width > maxWidth) {
                     height = (height * maxWidth) / width;
                     width = maxWidth;
@@ -145,27 +131,24 @@ export function compressImage(file, maxWidth = 800, quality = 0.7) {
                 const ctx = canvas.getContext('2d');
                 ctx.drawImage(img, 0, 0, width, height);
 
-                // Export en JPEG compressé
                 resolve(canvas.toDataURL('image/jpeg', quality));
             };
-            
+
             img.onerror = (err) => reject(err);
         };
-        
+
         reader.onerror = (err) => reject(err);
     });
 }
 
 /**
  * Nettoie les doublons dans une liste d'objets basés sur l'ID
- * @param {Array} items 
- * @returns {Promise<void>} (Modifie le tableau en place ou renvoie nettoyé si besoin)
+ * @param {Array} items
  */
 export async function cleanDuplicates(items) {
     const seen = new Set();
     const duplicates = [];
-    
-    // Identification
+
     for (let i = items.length - 1; i >= 0; i--) {
         const item = items[i];
         if (seen.has(item.id)) {
@@ -175,7 +158,6 @@ export async function cleanDuplicates(items) {
         }
     }
 
-    // Suppression
     duplicates.forEach(index => {
         items.splice(index, 1);
     });
@@ -198,7 +180,9 @@ export function getRandomColor() {
     return color;
 }
 
-// Fonction de nettoyage (anti-XSS)
+/**
+ * Nettoyage de chaîne HTML (anti-XSS)
+ */
 export function escapeHtml(text) {
     if (!text) return "";
     return text
@@ -220,10 +204,10 @@ export function calculateDistance(lat1, lon1, lat2, lon2) {
     const Δφ = (lat2 - lat1) * Math.PI / 180;
     const Δλ = (lon2 - lon1) * Math.PI / 180;
 
-    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
               Math.cos(φ1) * Math.cos(φ2) *
-              Math.sin(Δλ/2) * Math.sin(Δλ/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+              Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
 }
 
@@ -243,9 +227,17 @@ export function calculateBearing(lat1, lon1, lat2, lon2) {
 }
 
 /**
- * Convertit des coordonnées décimales en Degrés Minutes Secondes (DMS)
+ * Convertit un angle décimal en Degrés Minutes Secondes (DMS)
+ * Supporte aussi l'appel toDMS(lat, lng) avec 2 nombres pour compatibilité
  */
-export function toDMS(deg, isLat) {
+export function toDMS(deg, isLatOrLng = true) {
+    if (typeof isLatOrLng === 'number') {
+        return `${convertSingleDMS(deg, true)}  ${convertSingleDMS(isLatOrLng, false)}`;
+    }
+    return convertSingleDMS(deg, Boolean(isLatOrLng));
+}
+
+function convertSingleDMS(deg, isLat) {
     const absolute = Math.abs(deg);
     const degrees = Math.floor(absolute);
     const minutesNotTruncated = (absolute - degrees) * 60;
@@ -254,6 +246,89 @@ export function toDMS(deg, isLat) {
 
     const direction = isLat ? (deg >= 0 ? "N" : "S") : (deg >= 0 ? "E" : "O");
     return `${degrees}°${pad(minutes)}'${pad(seconds)}" ${direction}`;
+}
+
+/**
+ * Formate une surface en m² en unités cadastrales françaises (ha, a, ca)
+ * 1 ha = 10 000 m², 1 a = 100 m², 1 ca = 1 m²
+ */
+export function formatCadastralArea(areaM2) {
+    const totalM2 = Math.max(0, Math.round(areaM2 || 0));
+    const ha = Math.floor(totalM2 / 10000);
+    const remAfterHa = totalM2 % 10000;
+    const a = Math.floor(remAfterHa / 100);
+    const ca = remAfterHa % 100;
+
+    let parts = [];
+    if (ha > 0) parts.push(`${ha} ha`);
+    if (a > 0 || ha > 0) parts.push(`${pad(a)} a`);
+    parts.push(`${pad(ca)} ca`);
+
+    return {
+        ha,
+        a,
+        ca,
+        totalM2,
+        haDecimal: (areaM2 / 10000).toFixed(3),
+        haShort: (areaM2 / 10000).toFixed(2),
+        formatted: parts.join(' '),
+        m2Formatted: totalM2.toLocaleString('fr-FR') + ' m²'
+    };
+}
+
+/**
+ * Calcule le périmètre d'une géométrie GeoJSON (Polygon ou MultiPolygon) en mètres
+ */
+export function calculateGeoJSONPerimeter(geometry) {
+    if (!geometry || !geometry.coordinates) return 0;
+
+    const ringPerimeter = (ring) => {
+        if (!ring || ring.length < 2) return 0;
+        let perim = 0;
+        for (let i = 0; i < ring.length - 1; i++) {
+            const [lng1, lat1] = ring[i];
+            const [lng2, lat2] = ring[i + 1];
+            perim += calculateDistance(lat1, lng1, lat2, lng2);
+        }
+        return perim;
+    };
+
+    if (geometry.type === 'Polygon') {
+        return Math.round(ringPerimeter(geometry.coordinates[0]));
+    } else if (geometry.type === 'MultiPolygon') {
+        let total = 0;
+        geometry.coordinates.forEach(poly => {
+            if (poly && poly[0]) total += ringPerimeter(poly[0]);
+        });
+        return Math.round(total);
+    }
+    return 0;
+}
+
+/**
+ * Vérifie si un point [lat, lng] se trouve à l'intérieur d'une géométrie GeoJSON
+ */
+export function isLatLngInGeometry(lat, lng, geometry) {
+    if (!geometry || !geometry.coordinates) return false;
+
+    const pointInRing = (x, y, ring) => {
+        let inside = false;
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+            const xi = ring[i][0], yi = ring[i][1];
+            const xj = ring[j][0], yj = ring[j][1];
+            const intersect = ((yi > y) !== (yj > y)) &&
+                (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+            if (intersect) inside = !inside;
+        }
+        return inside;
+    };
+
+    if (geometry.type === 'Polygon') {
+        return pointInRing(lng, lat, geometry.coordinates[0]);
+    } else if (geometry.type === 'MultiPolygon') {
+        return geometry.coordinates.some(poly => poly[0] && pointInRing(lng, lat, poly[0]));
+    }
+    return false;
 }
 
 /**
@@ -274,7 +349,6 @@ export function exportTripToGPX(trip) {
         const lat = p[0];
         const lon = p[1];
         const ele = p[2] !== undefined && p[2] !== null ? `<ele>${p[2]}</ele>` : "";
-        // Temps estimé si absent
         const ptTime = new Date(new Date(trip.date).getTime() + (idx * 2000)).toISOString();
         trkpts += `      <trkpt lat="${lat}" lon="${lon}">\n        ${ele}\n        <time>${ptTime}</time>\n      </trkpt>\n`;
     });
@@ -307,7 +381,7 @@ ${trkpts}    </trkseg>
 
 /**
  * Parse un fichier GPX et extrait les points et métadonnées
- * @param {string} xmlText 
+ * @param {string} xmlText
  * @returns {Object} { points, distance, elevationGain, name }
  */
 export function parseGPX(xmlText) {
@@ -379,7 +453,6 @@ export function playAudioCue(type = 'ping') {
         gain.connect(audioCtx.destination);
 
         if (type === 'radar') {
-            // Sonar sonar ping doux
             osc.type = 'sine';
             osc.frequency.setValueAtTime(880, now);
             osc.frequency.exponentialRampToValueAtTime(1760, now + 0.15);
@@ -388,17 +461,15 @@ export function playAudioCue(type = 'ping') {
             osc.start(now);
             osc.stop(now + 0.35);
         } else if (type === 'success') {
-            // Fanfare 2 notes
             osc.type = 'triangle';
-            osc.frequency.setValueAtTime(523.25, now); // C5
-            osc.frequency.setValueAtTime(659.25, now + 0.1); // E5
-            osc.frequency.setValueAtTime(783.99, now + 0.2); // G5
+            osc.frequency.setValueAtTime(523.25, now);
+            osc.frequency.setValueAtTime(659.25, now + 0.1);
+            osc.frequency.setValueAtTime(783.99, now + 0.2);
             gain.gain.setValueAtTime(0.2, now);
             gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
             osc.start(now);
             osc.stop(now + 0.55);
         } else if (type === 'nature') {
-            // Gazouillis rapide oiseau
             osc.type = 'sine';
             osc.frequency.setValueAtTime(1500, now);
             osc.frequency.exponentialRampToValueAtTime(2800, now + 0.08);
@@ -407,6 +478,13 @@ export function playAudioCue(type = 'ping') {
             gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
             osc.start(now);
             osc.stop(now + 0.25);
+        } else {
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(660, now);
+            gain.gain.setValueAtTime(0.1, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+            osc.start(now);
+            osc.stop(now + 0.18);
         }
     } catch (e) {
         // Silencieux si audio non autorisé

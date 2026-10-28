@@ -5,9 +5,9 @@ import { checkTrophyProximity, updateUserLevel } from './gamification.js';
 import { getMapInstance, updateRadarDisplay } from './map.js';
 import { appState } from './state.js';
 
-let isRecording = false; 
+let isRecording = false;
 let trackWatchId = null;
-let currentPath = []; 
+let currentPath = [];
 let currentStartTime = null;
 let currentDistance = 0;
 let lastPositionTime = null;
@@ -26,16 +26,16 @@ export function initTracking(mapInstance) {
 }
 
 function startPassiveGPS() {
-    if (trackWatchId) return; 
+    if (trackWatchId) return;
 
     if ('geolocation' in navigator) {
         trackWatchId = navigator.geolocation.watchPosition(
-            onLocationUpdate, 
+            onLocationUpdate,
             (err) => {
                 console.warn("Erreur GPS", err);
-                if(err.code === 1) showToast("⚠️ GPS refusé par l'utilisateur");
+                if (err.code === 1) showToast("⚠️ GPS refusé par l'utilisateur");
                 else showToast("⚠️ Signal GPS introuvable");
-            }, 
+            },
             { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 }
         );
     } else {
@@ -52,19 +52,18 @@ function onLocationUpdate(pos) {
     let speed = pos.coords.speed;
     const now = Date.now();
 
-    document.dispatchEvent(new CustomEvent('tracking-update', { 
-        detail: { lat, lng, acc, head } 
+    document.dispatchEvent(new CustomEvent('tracking-update', {
+        detail: { lat, lng, acc, head }
     }));
 
     const map = getMapInstance();
     if (map) checkTrophyProximity(map, lat, lng);
 
-    // --- SCANNER RADAR PROXIMITÉ (40m / 100m) ---
+    // --- SCANNER RADAR PROXIMITÉ ---
     if (appState.radarActive && map) {
         const radius = appState.radarRadius || 40;
         let nearbyItem = null;
 
-        // 1. Recherche dans les points d'intérêt
         for (const p of appState.points) {
             const d = map.distance([lat, lng], [p.lat, p.lng]);
             if (d <= radius) {
@@ -73,7 +72,6 @@ function onLocationUpdate(pos) {
             }
         }
 
-        // 2. Recherche dans le Bégoledex
         if (!nearbyItem && appState.begoledex) {
             for (const b of appState.begoledex) {
                 if (b.lat && b.lng) {
@@ -88,7 +86,7 @@ function onLocationUpdate(pos) {
 
         if (nearbyItem) {
             updateRadarDisplay([lat, lng], radius, true);
-            if (now - lastRadarAlertTime > 15000) { // Alerte toutes les 15s max
+            if (now - lastRadarAlertTime > 15000) {
                 lastRadarAlertTime = now;
                 triggerHaptic('warning');
                 playAudioCue('radar');
@@ -114,7 +112,7 @@ function onLocationUpdate(pos) {
     if (map && currentPath.length > 0) {
         const lastPt = currentPath[currentPath.length - 1];
         const distSeg = map.distance([lastPt[0], lastPt[1]], [lat, lng]);
-        currentDistance += (distSeg / 1000); 
+        currentDistance += (distSeg / 1000);
     }
 
     updateDashboard(alt, speed, currentDistance);
@@ -122,9 +120,9 @@ function onLocationUpdate(pos) {
     if (currentTraceLayer && currentPath.length > 0) {
         const lastPt = currentPath[currentPath.length - 1];
         const segmentColor = getSpeedColor(speed);
-        
+
         L.polyline([[lastPt[0], lastPt[1]], [lat, lng]], {
-            color: segmentColor, weight: 5, opacity: 0.8, lineCap: 'round'
+            color: segmentColor, weight: 5, opacity: 0.85, lineCap: 'round'
         }).addTo(currentTraceLayer);
     }
 
@@ -132,27 +130,48 @@ function onLocationUpdate(pos) {
     currentPath.push(newPoint);
 }
 
-export async function toggleTracking() {
+function syncTrackingButtonsUI(recording) {
     const btn = document.getElementById('btn-tracking');
-    const map = getMapInstance();
+    const dockBtn = document.getElementById('dock-btn-track');
+    const recContainer = document.getElementById('recording-container');
+    const dashContainer = document.getElementById('dashboard');
 
+    if (recording) {
+        if (btn) {
+            btn.innerHTML = "⏹️ Arrêter le Trajet";
+            btn.className = "btn-stop-track";
+        }
+        if (dockBtn) {
+            dockBtn.classList.add('recording-active');
+            dockBtn.innerHTML = `<span class="dock-icon">⏹️</span><span class="dock-label">Stop REC</span>`;
+        }
+        if (recContainer) recContainer.classList.remove('hidden');
+        if (dashContainer) dashContainer.classList.remove('hidden');
+    } else {
+        if (btn) {
+            btn.innerHTML = "▶️ Lancer un Trajet GPS";
+            btn.className = "btn-start-track";
+        }
+        if (dockBtn) {
+            dockBtn.classList.remove('recording-active');
+            dockBtn.innerHTML = `<span class="dock-icon">▶️</span><span class="dock-label">Trajet</span>`;
+        }
+        if (recContainer) recContainer.classList.add('hidden');
+        if (dashContainer) dashContainer.classList.add('hidden');
+    }
+}
+
+export async function toggleTracking() {
     if (!isRecording) {
         // --- DÉMARRAGE REC ---
         isRecording = true;
-        
+
         currentPath = [];
         currentDistance = 0;
         currentStartTime = new Date();
         lastPositionTime = Date.now();
-        
-        // --- UI ANCIEN BOUTON ---
-        if (btn) {
-            btn.innerHTML = "⏹️ Stop";
-            btn.className = "btn-stop-track";
-        }
-        
-        document.getElementById('recording-container').classList.remove('hidden');
-        document.getElementById('dashboard').classList.remove('hidden');
+
+        syncTrackingButtonsUI(true);
 
         startTimer();
         await requestWakeLock();
@@ -160,7 +179,7 @@ export async function toggleTracking() {
 
         if (currentTraceLayer) currentTraceLayer.clearLayers();
 
-        showToast("REC démarré 🌈");
+        showToast("Enregistrement GPS démarré 🥾");
         triggerHaptic('start');
 
         startPassiveGPS();
@@ -168,7 +187,7 @@ export async function toggleTracking() {
     } else {
         // --- ARRÊT REC ---
         isRecording = false;
-        
+
         stopTimer();
         await releaseWakeLock();
         if (autoSaveInterval) {
@@ -177,21 +196,16 @@ export async function toggleTracking() {
         }
         localStorage.removeItem('begole_temp_track');
 
-        // --- UI ANCIEN BOUTON ---
-        if (btn) {
-            btn.innerHTML = "▶️ Lancer Trajet";
-            btn.className = "btn-start-track";
-        }
-        
-        document.getElementById('recording-container').classList.add('hidden');
-        document.getElementById('dashboard').classList.add('hidden');
+        syncTrackingButtonsUI(false);
 
         if (currentPath.length > 0) {
             const endTime = new Date();
             const elevationData = calculateElevation(currentPath);
             await saveTrip(currentPath, currentStartTime, endTime, currentDistance, elevationData);
-            alert(`Trajet terminé !\nDistance: ${currentDistance.toFixed(2)}km\nDénivelé: +${elevationData.gain}m`);
+            showToast(`🏁 Trajet enregistré : ${currentDistance.toFixed(2)} km (+${elevationData.gain} m)`);
             document.dispatchEvent(new CustomEvent('trip-saved'));
+        } else {
+            showToast("Trajet annulé (aucun déplacement détecté)");
         }
 
         if (currentTraceLayer) currentTraceLayer.clearLayers();
@@ -219,32 +233,24 @@ export function checkCrashRecovery(mapInstance) {
                 currentPath = data.path;
                 currentStartTime = new Date(data.startTime);
                 currentDistance = data.distance;
-                
+
                 isRecording = true;
-                
-                const btn = document.getElementById('btn-tracking');
-                if (btn) {
-                    btn.innerHTML = "⏹️ Stop";
-                    btn.className = "btn-stop-track";
-                }
-                
-                document.getElementById('recording-container').classList.remove('hidden');
-                document.getElementById('dashboard').classList.remove('hidden');
+                syncTrackingButtonsUI(true);
 
                 if (!currentTraceLayer && mapInstance) {
                     currentTraceLayer = L.layerGroup().addTo(mapInstance);
                 }
                 if (currentTraceLayer) {
                     L.polyline(currentPath.map(p => [p[0], p[1]]), {
-                        color: 'red', weight: 5
+                        color: '#e74c3c', weight: 5
                     }).addTo(currentTraceLayer);
                 }
 
                 startTimer();
                 requestWakeLock();
                 autoSaveInterval = setInterval(saveTrackState, 10000);
-                startPassiveGPS(); 
-                
+                startPassiveGPS();
+
                 showToast("Trajet restauré ♻️");
             } else {
                 localStorage.removeItem('begole_temp_track');
@@ -294,7 +300,6 @@ function calculateElevation(points) {
         let currAlt = points[i][2];
         if (currAlt !== null && lastAlt !== null && currAlt !== 0 && lastAlt !== 0) {
             let diff = currAlt - lastAlt;
-            // Filtre anti-bruit GPS : ignore les variations < 3m ou les téléportations > 50m
             if (Math.abs(diff) >= 3 && Math.abs(diff) <= 50) {
                 if (diff > 0) gain += diff; else loss += Math.abs(diff);
                 lastAlt = currAlt;
@@ -315,8 +320,7 @@ async function saveTrip(points, start, end, dist, elevation) {
         note: ""
     };
     await saveToDB('trips', trip);
-    
-    // Mise à jour immédiate de l'état en mémoire
+
     if (appState && appState.trips) {
         appState.trips.push(trip);
         updateUserLevel(appState.points, appState.trips);

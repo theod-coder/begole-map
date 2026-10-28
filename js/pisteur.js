@@ -26,51 +26,41 @@ const TRACKS_DB = [
 export function openPisteurModal() {
     const grid = document.getElementById('pisteur-grid');
     const modal = document.getElementById('modal-pisteur');
-    
+
     if (!grid || !modal) {
         showToast("Erreur : Modale introuvable");
         return;
     }
 
-    // Badge vu
     localStorage.setItem('begole_pisteur_viewed', 'true');
-
-    // Génération du contenu HTML
     grid.innerHTML = "";
-    
+
     TRACKS_DB.forEach(animal => {
         const card = document.createElement('div');
-        card.className = 'badge-card unlocked'; 
-        card.style.cursor = "pointer";
-        card.style.display = "flex";
-        card.style.flexDirection = "column";
-        card.style.alignItems = "center";
-        card.style.height = "auto";
-        card.style.transition = "all 0.2s ease";
-        
+        card.className = 'badge-card unlocked pisteur-card';
+
         card.innerHTML = `
-            <div style="text-align:center; padding-bottom:5px; width:100%;">
+            <div style="text-align:center; padding-bottom:4px; width:100%;">
                 <span class="badge-icon" style="font-size:32px; display:block;">${animal.icon}</span>
-                <span class="badge-title" style="font-size:14px; font-weight:bold;">${animal.name}</span>
-                <div class="expand-hint" style="font-size:10px; color:#aaa; margin-top:2px;">▼ Infos & Marquer</div>
+                <span class="badge-title" style="font-size:13px; font-weight:800;">${animal.name}</span>
+                <div class="expand-hint" style="font-size:10px; color:var(--text-sub); margin-top:3px;">▼ Infos & Poser repère</div>
             </div>
-            
-            <div class="pisteur-details" style="display:none; margin-top:8px; border-top:1px dashed #ccc; padding-top:8px; width:100%; text-align:center;">
-                <div style="font-size:22px; color:#8e44ad; font-weight:bold; letter-spacing:2px; margin-bottom:5px;">${animal.track}</div>
-                <div style="font-size:11px; color:#555; line-height:1.4; text-align:left; margin-bottom:10px;">${animal.desc}</div>
-                
+
+            <div class="pisteur-details" style="display:none; margin-top:8px; border-top:1px dashed var(--border-color); padding-top:8px; width:100%; text-align:center;">
+                <div style="font-size:20px; color:#8e44ad; font-weight:bold; letter-spacing:2px; margin-bottom:5px;">${animal.track}</div>
+                <div style="font-size:11px; color:var(--text-sub); line-height:1.4; text-align:left; margin-bottom:10px;">${animal.desc}</div>
+
                 <div style="display:flex; gap:6px; justify-content:center; flex-wrap:wrap;">
-                    <button class="btn-drop-track" style="background:#27ae60; color:white; border:none; padding:6px 10px; border-radius:15px; font-size:11px; font-weight:bold; cursor:pointer;">
-                        📍 Poser ce repère ici
+                    <button type="button" class="btn-drop-track" style="background:#27ae60; color:white; border:none; padding:6px 10px; border-radius:15px; font-size:11px; font-weight:bold; cursor:pointer;">
+                        📍 Poser ici
                     </button>
-                    <button class="btn-sound-track" style="background:#34495e; color:white; border:none; padding:6px 10px; border-radius:15px; font-size:11px; font-weight:bold; cursor:pointer;">
-                        🔊 Cri / Bruit
+                    <button type="button" class="btn-sound-track" style="background:#34495e; color:white; border:none; padding:6px 10px; border-radius:15px; font-size:11px; font-weight:bold; cursor:pointer;">
+                        🔊 Écouter
                     </button>
                 </div>
             </div>
         `;
-        
-        // Bouton marquer sur carte
+
         const btnDrop = card.querySelector('.btn-drop-track');
         btnDrop.addEventListener('click', async (e) => {
             e.stopPropagation();
@@ -106,36 +96,32 @@ export function openPisteurModal() {
             appState.points.push(newPoint);
             refreshMap(appState.points);
             updateUserLevel(appState.points, appState.trips);
-            
+
             triggerHaptic('success');
             playAudioCue('nature');
             modal.classList.add('hidden');
             showToast(`📍 Repère ${animal.icon} ${animal.name} placé sur la carte !`);
         });
 
-        // Bouton son
         const btnSound = card.querySelector('.btn-sound-track');
         btnSound.addEventListener('click', (e) => {
             e.stopPropagation();
-            playAudioCue('nature');
+            playAudioCue(animal.sound || 'nature');
             triggerHaptic('success');
         });
 
-        // Toggle déploiement carte
         card.onclick = () => {
             const details = card.querySelector('.pisteur-details');
             const hint = card.querySelector('.expand-hint');
-            
+
             if (details.style.display === "none") {
                 details.style.display = "block";
-                hint.innerText = "▲ Fermer";
-                card.style.backgroundColor = "#fff9c4";
-                card.style.borderColor = "#f1c40f";
+                hint.innerText = "▲ Replier";
+                card.classList.add('pisteur-expanded');
             } else {
                 details.style.display = "none";
-                hint.innerText = "▼ Infos & Marquer";
-                card.style.backgroundColor = "";
-                card.style.borderColor = "";
+                hint.innerText = "▼ Infos & Poser repère";
+                card.classList.remove('pisteur-expanded');
             }
         };
 

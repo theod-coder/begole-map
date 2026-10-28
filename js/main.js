@@ -1,28 +1,27 @@
-// --- IMPORTS ---
+// =========================================
+// POINT D'ENTRÉE PRINCIPAL - BÉGOLE MAP PRO
+// =========================================
+
 import { initDB, loadAllFromDB, checkStorageUsage } from './db.js';
 import { initMap, setVillageData, refreshMap, displayParcels } from './map.js';
-import { initEventListeners } from './ui.js';
-// Nouveaux imports suite à la refactorisation
-import { setPoints, setTrips, setParcels, setBegoledex } from './state.js'; // <-- AJOUTÉ
+import { initEventListeners, populateYearFilter } from './ui.js';
+import { setPoints, setTrips, setParcels, setBegoledex, setVillageGeoJson } from './state.js';
 import { updateAstroWidget, updateWeatherWidget } from './modules/weather.js';
-
+import { renderMenuCadastreSummary } from './cadastre.js';
 import { initAudio } from './audio.js';
 import { updateUserLevel, initDailyTrophy } from './gamification.js';
 import { checkCrashRecovery, initTracking } from './tracking.js';
 import { cleanDuplicates } from './utils.js';
 import { APP_VERSION } from './config.js';
 
-// --- DÉMARRAGE DE L'APPLICATION ---
-
 async function startApp() {
-    console.log(`🚀 Démarrage de Bégole Map v${APP_VERSION} (Outdoor Pro Edition)...`);
+    console.log(`🚀 Démarrage de Bégole Map v${APP_VERSION} (Outdoor & Cadastre Pro)...`);
 
     try {
-        // 1. Initialisation de la Base de Données
+        // 1. Initialisation de la Base de Données IndexedDB
         await initDB();
 
-        // 2. Chargement des données locales
-        // On charge aussi le 'begoledex' maintenant
+        // 2. Chargement parallèle des données locales
         const [points, parcels, trips, begoledex] = await Promise.all([
             loadAllFromDB('points'),
             loadAllFromDB('parcels'),
@@ -32,29 +31,25 @@ async function startApp() {
 
         console.log(`📊 Données : ${points.length} pts, ${parcels.length} parcelles, ${trips.length} trajets, ${begoledex.length} plantes.`);
 
-        // Nettoyage doublons
+        // Nettoyage des doublons éventuels
         await cleanDuplicates(points);
 
-        // --- NOUVEAU : Centralisation des données dans le State ---
-        // On remplit le "cerveau" de l'app ici
+        // 3. Centralisation dans l'état réactif
         setPoints(points);
         setTrips(trips);
         setParcels(parcels);
-        setBegoledex(begoledex); // <-- Stockage en mémoire vive
+        setBegoledex(begoledex);
 
-        // 3. Initialisation de la Carte
+        // 4. Initialisation de la Carte Leaflet
         const map = initMap();
 
-        // 4. Chargement du périmètre du village (JSON)
+        // 5. Chargement du périmètre de la commune de Bégole (JSON)
         try {
             const response = await fetch('village.json');
             if (response.ok) {
                 const villageGeoJson = await response.json();
-                
-                // On passe les données au module Map pour l'affichage des bordures
-                setVillageData(villageGeoJson); 
-                
-                // On initialise le trophée du jour
+                setVillageGeoJson(villageGeoJson);
+                setVillageData(villageGeoJson);
                 initDailyTrophy(map, villageGeoJson);
             } else {
                 console.warn("⚠️ Fichier village.json introuvable.");
@@ -63,29 +58,29 @@ async function startApp() {
             console.error("Erreur chargement village.json", e);
         }
 
-        // 5. Affichage initial
-        refreshMap(points);       
-        displayParcels(parcels);  
+        // 6. Affichage initial sur la carte
+        refreshMap(points);
+        displayParcels(parcels);
 
-        // 6. Interface Utilisateur
-        // MODIFIÉ : On ne passe plus les données (points, trips...), ui.js utilisera appState
+        // 7. Initialisation de l'Interface Utilisateur
         initEventListeners(map);
+        populateYearFilter();
+        renderMenuCadastreSummary();
 
-        // 7. Widgets et Environnement (Via le nouveau module weather.js)
+        // 8. Widgets Météo, Astro & Audio
         updateAstroWidget();
         updateWeatherWidget();
-        
         initAudio();
         checkStorageUsage();
 
-        // 8. Gamification
+        // 9. Gamification
         updateUserLevel(points, trips);
 
-        // 9. Tracking & Recovery
+        // 10. Suivi GPS & Récupération après incident
         initTracking(map);
         checkCrashRecovery(map);
 
-        // 10. Shake
+        // 11. Détection de secousse (Shake to Point)
         initShakeListener(map);
 
     } catch (err) {
@@ -104,7 +99,7 @@ function initShakeListener(map) {
         window.addEventListener('devicemotion', (e) => {
             const acc = e.accelerationIncludingGravity;
             if (!acc) return;
-            
+
             const currTime = Date.now();
             if ((currTime - lastShakeTime) > 2000) {
                 const diff = Math.abs(acc.x + acc.y + acc.z - lastShakeX - lastShakeY - lastShakeZ);
@@ -122,7 +117,7 @@ function initShakeListener(map) {
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('./sw.js')
-            .then(reg => console.log('✅ Service Worker OK'))
+            .then(() => console.log('✅ Service Worker enregistré'))
             .catch(err => console.log('❌ Erreur SW :', err));
     });
 }

@@ -1,5 +1,5 @@
-// Service Worker pour Bégole Map Pro v5.0
-const CACHE_NAME = 'begole-map-v18-pro';
+// Service Worker pour Bégole Map Pro v6.0
+const CACHE_NAME = 'begole-map-v19-pro';
 const TILE_CACHE_NAME = 'begole-tiles-v1';
 
 const CORE_ASSETS = [
@@ -9,7 +9,7 @@ const CORE_ASSETS = [
   './manifest.json',
   './village.json',
   './logo/logoV2.png',
-  
+
   // Scripts JS (Tous les modules inclus)
   './js/main.js',
   './js/config.js',
@@ -17,6 +17,7 @@ const CORE_ASSETS = [
   './js/utils.js',
   './js/db.js',
   './js/map.js',
+  './js/cadastre.js',
   './js/ui.js',
   './js/tracking.js',
   './js/audio.js',
@@ -44,7 +45,6 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then(async (cache) => {
-      // Ajout résilient : si un asset tiers échoue, ne bloque pas toute l'installation
       for (const asset of CORE_ASSETS) {
         try {
           await cache.add(asset);
@@ -72,13 +72,11 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // 1. Ne pas intercepter les requêtes POST (ex: PlantNet API)
   if (event.request.method !== 'GET') {
     return;
   }
 
-  // 2. Gestion des tuiles cartographiques (OSM, IGN Geoportail) : Cache dynamique
-  const isMapTile = url.hostname.includes('tile.openstreetmap.org') || 
+  const isMapTile = url.hostname.includes('tile.openstreetmap.org') ||
                     url.hostname.includes('data.geopf.fr');
 
   if (isMapTile) {
@@ -100,7 +98,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 3. Pour le reste des ressources de l'app : Cache d'abord, puis Réseau
   event.respondWith(
     caches.match(event.request).then((response) => {
       if (response) return response;
@@ -111,7 +108,6 @@ self.addEventListener('fetch', (event) => {
         }
         return networkResponse;
       }).catch(() => {
-        // Fallback si offline et ressource absente
         return response;
       });
     })
