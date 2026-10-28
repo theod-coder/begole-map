@@ -1,6 +1,6 @@
-// Service Worker pour Bégole Map Pro v6.0
-const CACHE_NAME = 'begole-map-v19-pro';
-const TILE_CACHE_NAME = 'begole-tiles-v1';
+// Service Worker pour Bégole Map Pro v7.0
+const CACHE_NAME = 'begole-map-v20-pro';
+const TILE_CACHE_NAME = 'begole-tiles-v2';
 
 const CORE_ASSETS = [
   './',
